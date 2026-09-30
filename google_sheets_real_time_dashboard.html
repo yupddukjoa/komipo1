@@ -1,0 +1,1059 @@
+<!DOCTYPE html>
+<html lang="ko" class="h-full bg-slate-900 text-slate-100">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>실시간 현황 대시보드 - 호기별 정보 조회</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- PapaParse for CSV processing -->
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- Inter Font -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+          },
+          colors: {
+            brand: {
+              50: '#eef2ff',
+              100: '#e0e7ff',
+              500: '#6366f1',
+              600: '#4f46e5',
+              700: '#4338ca',
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0f172a;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #475569;
+    }
+
+    /* Pulse animation glow */
+    @keyframes pulse-glow {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.6; transform: scale(1.05); }
+    }
+    .pulse-live {
+      animation: pulse-glow 2s infinite ease-in-out;
+    }
+
+    /* Custom progress bar transition */
+    .timer-progress {
+      transition: width 1s linear;
+    }
+  </style>
+</head>
+<body class="h-full flex flex-col font-sans antialiased text-slate-100 bg-slate-950">
+
+  <!-- Top Navigation Header -->
+  <header class="bg-slate-900/90 backdrop-blur border-b border-slate-800 sticky top-0 z-30 px-4 py-3 sm:px-6">
+    <div class="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
+      
+      <!-- Brand & Status -->
+      <div class="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-start">
+        <div class="flex items-center gap-3">
+          <div class="p-2.5 bg-indigo-600/20 text-indigo-400 rounded-xl border border-indigo-500/30">
+            <i class="fa-solid fa-chart-line text-xl"></i>
+          </div>
+          <div>
+            <h1 class="text-lg font-bold text-white flex items-center gap-2">
+              실시간 현황 대시보드
+              <span id="liveBadge" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1.5 pulse-live"></span>
+                실시간 갱신 중
+              </span>
+            </h1>
+            <p class="text-xs text-slate-400 flex items-center gap-2">
+              <span id="lastUpdatedText">데이터 수신 대기 중...</span>
+            </p>
+          </div>
+        </div>
+
+        <!-- Mobile Settings Button -->
+        <button onclick="toggleSettingsModal()" class="sm:hidden p-2 text-slate-400 hover:text-white bg-slate-800 rounded-lg">
+          <i class="fa-solid fa-gear"></i>
+        </button>
+      </div>
+
+      <!-- Controls & Refresh Status -->
+      <div class="flex items-center gap-3 w-full sm:w-auto justify-end">
+        <!-- 30s Countdown Display -->
+        <div class="flex items-center bg-slate-800/80 px-3 py-1.5 rounded-lg border border-slate-700 text-xs text-slate-300 gap-2">
+          <i class="fa-regular fa-clock text-indigo-400"></i>
+          <span>다음 갱신: <strong id="countdownSec" class="text-indigo-400 font-mono text-sm">30</strong>초</span>
+          <button id="pauseBtn" onclick="toggleAutoRefresh()" title="자동 갱신 일시정지/시작" class="ml-1 text-slate-400 hover:text-white transition">
+            <i id="pauseIcon" class="fa-solid fa-pause text-xs"></i>
+          </button>
+        </div>
+
+        <!-- Manual Refresh Button -->
+        <button id="refreshBtn" onclick="fetchData(true)" class="flex items-center gap-2 px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold shadow-lg shadow-indigo-600/20 transition active:scale-95">
+          <i id="refreshIcon" class="fa-solid fa-arrows-rotate"></i>
+          <span>새로고침</span>
+        </button>
+
+        <!-- Settings Button -->
+        <button onclick="toggleSettingsModal()" class="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-medium border border-slate-700 transition">
+          <i class="fa-solid fa-gear"></i>
+          <span>설정</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Countdown Progress Bar -->
+    <div class="w-full bg-slate-800 h-1 absolute bottom-0 left-0 overflow-hidden">
+      <div id="progressBar" class="bg-indigo-500 h-full w-full timer-progress"></div>
+    </div>
+  </header>
+
+  <!-- Main Content Container -->
+  <main class="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 space-y-6">
+
+    <!-- Notification / Alert Bar -->
+    <div id="statusAlert" class="hidden rounded-xl p-4 border bg-amber-500/10 border-amber-500/30 text-amber-200 text-sm flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <i class="fa-solid fa-triangle-exclamation text-amber-400 text-lg"></i>
+        <span id="statusAlertMsg">데이터 연결을 확인하고 있습니다.</span>
+      </div>
+      <button onclick="document.getElementById('statusAlert').classList.add('hidden')" class="text-amber-400 hover:text-amber-100">
+        <i class="fa-solid fa-xmark"></i>
+      </button>
+    </div>
+
+    <!-- Machine / Unit Selector Bar (호기명 선택 및 조회) -->
+    <div class="bg-slate-900/90 border border-slate-800/90 backdrop-blur rounded-2xl p-4 shadow-xl">
+      <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-3">
+        <div class="flex items-center gap-2.5">
+          <div class="p-2 bg-indigo-500/20 text-indigo-400 rounded-xl border border-indigo-500/30">
+            <i class="fa-solid fa-microchip text-base"></i>
+          </div>
+          <div>
+            <h2 class="text-sm font-bold text-white flex items-center gap-2">
+              호기명 선택 조회
+              <span id="activeUnitBadge" class="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">전체 호기</span>
+            </h2>
+            <p id="unitColDetectedText" class="text-[11px] text-slate-400">기준 컬럼: 감지 중...</p>
+          </div>
+        </div>
+
+        <!-- Mobile & Compact Select Dropdown for Unit Selection -->
+        <div class="flex items-center gap-2 w-full sm:w-auto">
+          <label for="unitSelectDropdown" class="text-xs text-slate-400 whitespace-nowrap">호기명 선택:</label>
+          <select id="unitSelectDropdown" onchange="selectUnit(this.value)" class="w-full sm:w-auto bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-xl px-3 py-1.5 focus:border-indigo-500 focus:outline-none transition">
+            <option value="ALL">전체 호기 보기</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Quick Select Pills / Tabs Container -->
+      <div id="unitTabsContainer" class="flex items-center gap-2 overflow-x-auto pb-1.5 scrollbar-none">
+        <button onclick="selectUnit('ALL')" class="unit-tab-btn active-unit-tab px-3.5 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap bg-indigo-600 text-white shadow-lg transition">
+          <i class="fa-solid fa-border-all mr-1.5"></i>전체 호기
+        </button>
+      </div>
+    </div>
+
+    <!-- Dynamic Metrics / KPI Grid -->
+    <div id="kpiContainer" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <!-- Loading Skeletons -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 animate-pulse flex flex-col justify-between h-32">
+        <div class="h-4 bg-slate-800 rounded w-1/2"></div>
+        <div class="h-8 bg-slate-800 rounded w-3/4"></div>
+        <div class="h-3 bg-slate-800 rounded w-1/3"></div>
+      </div>
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 animate-pulse flex flex-col justify-between h-32">
+        <div class="h-4 bg-slate-800 rounded w-1/2"></div>
+        <div class="h-8 bg-slate-800 rounded w-3/4"></div>
+        <div class="h-3 bg-slate-800 rounded w-1/3"></div>
+      </div>
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 animate-pulse flex flex-col justify-between h-32">
+        <div class="h-4 bg-slate-800 rounded w-1/2"></div>
+        <div class="h-8 bg-slate-800 rounded w-3/4"></div>
+        <div class="h-3 bg-slate-800 rounded w-1/3"></div>
+      </div>
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 animate-pulse flex flex-col justify-between h-32">
+        <div class="h-4 bg-slate-800 rounded w-1/2"></div>
+        <div class="h-8 bg-slate-800 rounded w-3/4"></div>
+        <div class="h-3 bg-slate-800 rounded w-1/3"></div>
+      </div>
+    </div>
+
+    <!-- Charts Section Grid -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      
+      <!-- Chart 1: Main Category / Machine Distribution -->
+      <div class="lg:col-span-2 bg-slate-900/80 border border-slate-800/80 backdrop-blur rounded-2xl p-5 shadow-xl flex flex-col">
+        <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
+          <div>
+            <h3 id="chart1Title" class="text-base font-semibold text-white flex items-center gap-2">
+              <i class="fa-solid fa-chart-simple text-indigo-400"></i>
+              <span>호기별 / 항목별 데이터 분포</span>
+            </h3>
+            <p class="text-xs text-slate-400">선택한 호기 데이터의 시각화 그래프</p>
+          </div>
+          <div class="flex items-center gap-2">
+            <select id="chart1TypeSelect" onchange="renderCharts()" class="bg-slate-800 border border-slate-700 text-xs rounded-lg px-2.5 py-1.5 text-slate-200 outline-none focus:border-indigo-500">
+              <option value="bar">막대 그래프</option>
+              <option value="doughnut">도넛 그래프</option>
+              <option value="line">꺾은선 그래프</option>
+            </select>
+          </div>
+        </div>
+        <div class="relative flex-1 min-h-[280px] w-full flex items-center justify-center">
+          <canvas id="chart1Canvas"></canvas>
+        </div>
+      </div>
+
+      <!-- Chart 2: Secondary Ratio / Status Distribution -->
+      <div class="bg-slate-900/80 border border-slate-800/80 backdrop-blur rounded-2xl p-5 shadow-xl flex flex-col">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <h3 id="chart2Title" class="text-base font-semibold text-white flex items-center gap-2">
+              <i class="fa-solid fa-chart-pie text-emerald-400"></i>
+              <span>상태 및 구성 비중</span>
+            </h3>
+            <p class="text-xs text-slate-400">비율 분석 시각화</p>
+          </div>
+        </div>
+        <div class="relative flex-1 min-h-[280px] w-full flex items-center justify-center">
+          <canvas id="chart2Canvas"></canvas>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Data Table Container Card -->
+    <div class="bg-slate-900/80 border border-slate-800/80 backdrop-blur rounded-2xl p-5 shadow-xl space-y-4">
+      
+      <!-- Table Filter Header -->
+      <div class="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
+        <div>
+          <h3 class="text-base font-semibold text-white flex items-center gap-2">
+            <i class="fa-solid fa-table text-indigo-400"></i>
+            <span>상세 데이터 목록</span>
+            <span id="rowCountBadge" class="bg-indigo-500/20 text-indigo-300 text-xs px-2 py-0.5 rounded-full border border-indigo-500/30">0건</span>
+          </h3>
+          <p class="text-xs text-slate-400">선택된 호기 및 검색 조건 필터링 결과</p>
+        </div>
+
+        <!-- Search & Filter Controls -->
+        <div class="flex flex-wrap items-center gap-2">
+          <!-- Search Input -->
+          <div class="relative flex-1 sm:flex-initial min-w-[200px]">
+            <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs"></i>
+            <input id="searchInput" oninput="handleSearch()" type="text" placeholder="전체 검색..." class="w-full bg-slate-950 border border-slate-800 rounded-lg pl-9 pr-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition">
+          </div>
+
+          <!-- Category Filter Selector -->
+          <select id="columnFilterSelect" onchange="handleFilter()" class="bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500">
+            <option value="ALL">전체 항목</option>
+          </select>
+
+          <!-- Export CSV Button -->
+          <button onclick="exportCSV()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 rounded-lg text-xs font-medium flex items-center gap-1.5 transition" title="선택 데이터 내보내기">
+            <i class="fa-solid fa-download text-xs text-slate-400"></i>
+            <span>내보내기</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Responsive Table View -->
+      <div class="overflow-x-auto rounded-xl border border-slate-800/80 bg-slate-950/50">
+        <table class="w-full text-left text-xs text-slate-300">
+          <thead id="tableHeader" class="bg-slate-900/90 text-slate-400 font-medium uppercase tracking-wider border-b border-slate-800">
+            <tr>
+              <th class="p-4 text-center">데이터를 불러오는 중입니다...</th>
+            </tr>
+          </thead>
+          <tbody id="tableBody" class="divide-y divide-slate-800/60 font-mono text-slate-300">
+            <!-- Dynamic rows inserted here -->
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Table Pagination Footer -->
+      <div class="flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-400 pt-2">
+        <div id="paginationInfo">
+          페이지 1 / 1
+        </div>
+        <div class="flex items-center gap-2">
+          <button id="prevPageBtn" onclick="changePage(-1)" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 rounded-lg disabled:opacity-40 disabled:hover:bg-slate-800 transition">
+            <i class="fa-solid fa-chevron-left mr-1"></i> 이전
+          </button>
+          <span id="currentPageNum" class="px-3 py-1 bg-indigo-600/20 text-indigo-400 rounded-md font-semibold border border-indigo-500/30">1</span>
+          <button id="nextPageBtn" onclick="changePage(1)" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 rounded-lg disabled:opacity-40 disabled:hover:bg-slate-800 transition">
+            다음 <i class="fa-solid fa-chevron-right ml-1"></i>
+          </button>
+        </div>
+      </div>
+
+    </div>
+
+  </main>
+
+  <!-- Settings Modal -->
+  <div id="settingsModal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-6 space-y-5 shadow-2xl">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <h3 class="text-base font-bold text-white flex items-center gap-2">
+          <i class="fa-solid fa-gear text-indigo-400"></i>
+          <span>대시보드 환경 설정</span>
+        </h3>
+        <button onclick="toggleSettingsModal()" class="text-slate-400 hover:text-white text-lg">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <div class="space-y-4">
+        <!-- Sheet URL Input -->
+        <div>
+          <label class="block text-xs font-semibold text-slate-300 mb-1">Google Sheets CSV URL</label>
+          <input id="sheetUrlInput" type="text" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:border-indigo-500 focus:outline-none font-mono">
+          <p class="text-[11px] text-slate-500 mt-1">구글 스프레드시트 [웹에 게시] → CSV 형식 URL</p>
+        </div>
+
+        <!-- Refresh Interval Input -->
+        <div>
+          <label class="block text-xs font-semibold text-slate-300 mb-1">자동 갱신 주기 (초)</label>
+          <select id="refreshIntervalSelect" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:border-indigo-500 focus:outline-none">
+            <option value="10">10초</option>
+            <option value="15">15초</option>
+            <option value="30" selected>30초 (기본값)</option>
+            <option value="60">60초 (1분)</option>
+            <option value="300">300초 (5분)</option>
+          </select>
+        </div>
+
+        <!-- Manual Unit Column Selection in Settings -->
+        <div>
+          <label class="block text-xs font-semibold text-slate-300 mb-1">호기명(설비/장비) 지정 열(Column)</label>
+          <select id="unitColumnSettingSelect" class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 focus:border-indigo-500 focus:outline-none">
+            <option value="AUTO">자동 감지 (호기명, 호기, 설비, 라인, Machine, Unit...)</option>
+          </select>
+          <p class="text-[11px] text-slate-500 mt-1">호기 분류의 기준이 되는 데이터베이스 컬럼을 직접 선택합니다.</p>
+        </div>
+
+        <!-- Proxy Toggle -->
+        <div class="flex items-center justify-between bg-slate-950 p-3 rounded-xl border border-slate-800">
+          <div>
+            <p class="text-xs font-medium text-slate-200">CORS 프록시 우회 모드</p>
+            <p class="text-[11px] text-slate-500">브라우저 보안 교차 오리진 접속 허용</p>
+          </div>
+          <input id="useProxyToggle" type="checkbox" class="w-4 h-4 accent-indigo-600 rounded cursor-pointer">
+        </div>
+      </div>
+
+      <div class="flex items-center justify-end gap-2 border-t border-slate-800 pt-4">
+        <button onclick="toggleSettingsModal()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-lg transition">취소</button>
+        <button onclick="saveSettings()" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg shadow-lg shadow-indigo-600/30 transition">저장 및 적용</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- JavaScript Logic -->
+  <script>
+    // Configuration & State Variables
+    const DEFAULT_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTe2YRX4kCpzu1zaAL1hIUY_MwFZXarDM2frmmEzBhPg9fRxjy8_CSAFWdgdlYECkf-CCmxJgynafcg/pub?output=csv";
+    
+    let currentCsvUrl = localStorage.getItem('dash_csv_url') || DEFAULT_CSV_URL;
+    let refreshInterval = parseInt(localStorage.getItem('dash_interval') || '30');
+    let useProxy = localStorage.getItem('dash_proxy') === 'true';
+    let customUnitColumn = localStorage.getItem('dash_unit_col') || 'AUTO';
+
+    let isAutoRefreshActive = true;
+    let countdownTimer = refreshInterval;
+    let timerInterval = null;
+    
+    let rawData = [];
+    let filteredData = [];
+    let headers = [];
+    let numericColumns = [];
+    let categoryColumns = [];
+
+    // Unit / Machine selection state variables
+    let detectedUnitColumn = null;
+    let selectedUnit = 'ALL';
+    let availableUnits = [];
+    
+    let currentPage = 1;
+    const itemsPerPage = 10;
+    
+    let chart1Instance = null;
+    let chart2Instance = null;
+
+    // DOM Elements
+    const countdownSecEl = document.getElementById('countdownSec');
+    const progressBarEl = document.getElementById('progressBar');
+    const pauseIconEl = document.getElementById('pauseIcon');
+    const refreshIconEl = document.getElementById('refreshIcon');
+    const lastUpdatedTextEl = document.getElementById('lastUpdatedText');
+    const statusAlertEl = document.getElementById('statusAlert');
+    const statusAlertMsgEl = document.getElementById('statusAlertMsg');
+
+    // On Load Initialization
+    window.onload = function() {
+      document.getElementById('sheetUrlInput').value = currentCsvUrl;
+      document.getElementById('refreshIntervalSelect').value = refreshInterval;
+      document.getElementById('useProxyToggle').checked = useProxy;
+
+      // Start fetching data immediately
+      fetchData();
+      startTimer();
+    };
+
+    // Auto Refresh Timer Control
+    function startTimer() {
+      if (timerInterval) clearInterval(timerInterval);
+      countdownTimer = refreshInterval;
+      updateTimerUI();
+
+      timerInterval = setInterval(() => {
+        if (!isAutoRefreshActive) return;
+
+        countdownTimer--;
+        if (countdownTimer <= 0) {
+          fetchData();
+          countdownTimer = refreshInterval;
+        }
+        updateTimerUI();
+      }, 1000);
+    }
+
+    function updateTimerUI() {
+      countdownSecEl.textContent = countdownTimer;
+      const progressPercent = (countdownTimer / refreshInterval) * 100;
+      progressBarEl.style.width = `${progressPercent}%`;
+    }
+
+    function toggleAutoRefresh() {
+      isAutoRefreshActive = !isAutoRefreshActive;
+      if (isAutoRefreshActive) {
+        pauseIconEl.className = 'fa-solid fa-pause text-xs';
+      } else {
+        pauseIconEl.className = 'fa-solid fa-play text-xs';
+      }
+    }
+
+    // Fetch CSV Data from Google Sheets
+    async function fetchData(isManual = false) {
+      if (isManual) {
+        refreshIconEl.classList.add('fa-spin');
+      }
+
+      statusAlertEl.classList.add('hidden');
+
+      let targetUrl = currentCsvUrl;
+      if (useProxy) {
+        targetUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(currentCsvUrl)}`;
+      }
+
+      try {
+        const response = await fetch(targetUrl, { cache: 'no-cache' });
+        if (!response.ok) throw new Error(`HTTP 오류: ${response.status}`);
+        
+        const csvText = await response.text();
+        parseCSV(csvText);
+
+        const now = new Date();
+        lastUpdatedTextEl.textContent = `최근 동기화: ${now.toLocaleTimeString('ko-KR')}`;
+        
+      } catch (err) {
+        console.warn('직접 수신 실패, 보조 프록시로 재시도합니다.', err);
+        if (!useProxy) {
+          try {
+            const fallbackUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(currentCsvUrl)}`;
+            const res = await fetch(fallbackUrl);
+            const csvText = await res.text();
+            parseCSV(csvText);
+            const now = new Date();
+            lastUpdatedTextEl.textContent = `최근 동기화 (프록시): ${now.toLocaleTimeString('ko-KR')}`;
+            statusAlertEl.classList.add('hidden');
+          } catch (proxyErr) {
+            showErrorAlert(`데이터 수신 실패: ${proxyErr.message}. 웹에 게시 상태를 확인하세요.`);
+          }
+        } else {
+          showErrorAlert(`데이터 수신 실패: ${err.message}`);
+        }
+      } finally {
+        if (isManual) {
+          setTimeout(() => refreshIconEl.classList.remove('fa-spin'), 500);
+        }
+        countdownTimer = refreshInterval;
+        updateTimerUI();
+      }
+    }
+
+    function showErrorAlert(msg) {
+      statusAlertMsgEl.textContent = msg;
+      statusAlertEl.classList.remove('hidden');
+    }
+
+    // Parse CSV Text
+    function parseCSV(csvContent) {
+      Papa.parse(csvContent, {
+        header: true,
+        skipEmptyLines: true,
+        dynamicTyping: true,
+        complete: function(results) {
+          if (!results.data || results.data.length === 0) {
+            showErrorAlert("데이터가 비어있거나 CSV 형식이 유효하지 않습니다.");
+            return;
+          }
+
+          rawData = results.data;
+          headers = Object.keys(rawData[0] || {});
+
+          analyzeColumns();
+          detectUnitColumn();
+          renderUnitFilterTabs();
+          populateSettingsUnitSelect();
+          populateCategoryFilter();
+
+          applyFilters();
+        },
+        error: function(error) {
+          showErrorAlert(`CSV 파싱 에러: ${error.message}`);
+        }
+      });
+    }
+
+    // Classify columns into numeric vs textual categories
+    function analyzeColumns() {
+      numericColumns = [];
+      categoryColumns = [];
+
+      if (rawData.length === 0) return;
+
+      headers.forEach(header => {
+        let isNumeric = true;
+        let nonNullCount = 0;
+
+        for (let i = 0; i < Math.min(rawData.length, 50); i++) {
+          const val = rawData[i][header];
+          if (val !== null && val !== undefined && val !== '') {
+            nonNullCount++;
+            if (isNaN(Number(val))) {
+              isNumeric = false;
+              break;
+            }
+          }
+        }
+
+        if (isNumeric && nonNullCount > 0) {
+          numericColumns.push(header);
+        } else {
+          categoryColumns.push(header);
+        }
+      });
+    }
+
+    // Automatically detect column representing "호기명" / "Machine Name"
+    function detectUnitColumn() {
+      if (customUnitColumn !== 'AUTO' && headers.includes(customUnitColumn)) {
+        detectedUnitColumn = customUnitColumn;
+      } else {
+        // High priority keywords for 호기명
+        const keywords = ['호기명', '호기', '설비명', '설비', '라인명', '라인', '장비명', '장비', 'unit', 'machine', 'line', 'equip'];
+        detectedUnitColumn = headers.find(h => 
+          keywords.some(kw => String(h).toLowerCase().includes(kw))
+        ) || categoryColumns[0] || headers[0];
+      }
+
+      document.getElementById('unitColDetectedText').textContent = `기준 열: [${detectedUnitColumn || '없음'}]`;
+
+      // Extract unique unit/machine names
+      if (detectedUnitColumn) {
+        const set = new Set();
+        rawData.forEach(r => {
+          const val = r[detectedUnitColumn];
+          if (val !== null && val !== undefined && String(val).trim() !== '') {
+            set.add(String(val).trim());
+          }
+        });
+        // Sort naturally
+        availableUnits = Array.from(set).sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+      } else {
+        availableUnits = [];
+      }
+    }
+
+    // Render Unit Pill Buttons & Dropdown
+    function renderUnitFilterTabs() {
+      const container = document.getElementById('unitTabsContainer');
+      const dropdown = document.getElementById('unitSelectDropdown');
+
+      let tabsHtml = `
+        <button onclick="selectUnit('ALL')" class="unit-tab-btn ${selectedUnit === 'ALL' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'} px-3.5 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition border border-slate-700/50 flex items-center gap-1.5">
+          <i class="fa-solid fa-border-all text-[11px]"></i>
+          <span>전체 호기</span>
+        </button>
+      `;
+
+      let dropdownHtml = '<option value="ALL">전체 호기 보기</option>';
+
+      availableUnits.forEach(unit => {
+        const isSelected = selectedUnit === unit;
+        const tabClass = isSelected 
+          ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30' 
+          : 'bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white';
+
+        tabsHtml += `
+          <button onclick="selectUnit('${escapeHtml(unit)}')" class="unit-tab-btn ${tabClass} px-3.5 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition border border-slate-700/50 flex items-center gap-1.5">
+            <i class="fa-solid fa-microchip text-[11px] opacity-70"></i>
+            <span>${escapeHtml(unit)}</span>
+          </button>
+        `;
+
+        dropdownHtml += `<option value="${escapeHtml(unit)}" ${isSelected ? 'selected' : ''}>${escapeHtml(unit)}</option>`;
+      });
+
+      container.innerHTML = tabsHtml;
+      dropdown.innerHTML = dropdownHtml;
+
+      // Update badge label
+      const badge = document.getElementById('activeUnitBadge');
+      badge.textContent = selectedUnit === 'ALL' ? '전체 호기' : `${selectedUnit}`;
+    }
+
+    // Populate category dropdown filter
+    function populateCategoryFilter() {
+      const select = document.getElementById('columnFilterSelect');
+      select.innerHTML = '<option value="ALL">전체 항목</option>';
+
+      const mainCat = categoryColumns.find(c => c !== detectedUnitColumn) || categoryColumns[0];
+      if (mainCat) {
+        const values = new Set();
+        rawData.forEach(r => {
+          if (r[mainCat]) values.add(String(r[mainCat]).trim());
+        });
+
+        Array.from(values).sort().forEach(val => {
+          const opt = document.createElement('option');
+          opt.value = val;
+          opt.textContent = val;
+          select.appendChild(opt);
+        });
+      }
+    }
+
+    // Settings modal column selector
+    function populateSettingsUnitSelect() {
+      const select = document.getElementById('unitColumnSettingSelect');
+      select.innerHTML = '<option value="AUTO">자동 감지 (호기명, 호기, 설비, 라인, Machine, Unit...)</option>';
+
+      headers.forEach(h => {
+        const opt = document.createElement('option');
+        opt.value = h;
+        opt.textContent = h;
+        if (customUnitColumn === h) opt.selected = true;
+        select.appendChild(opt);
+      });
+    }
+
+    // Select specific unit filter
+    function selectUnit(unitVal) {
+      selectedUnit = unitVal;
+      renderUnitFilterTabs();
+      applyFilters();
+    }
+
+    // Handle Search and Category Filter
+    function handleSearch() {
+      applyFilters();
+    }
+
+    function handleFilter() {
+      applyFilters();
+    }
+
+    // Master Filter Algorithm
+    function applyFilters() {
+      const searchTerm = document.getElementById('searchInput').value.toLowerCase().trim();
+      const filterVal = document.getElementById('columnFilterSelect').value;
+      const mainCat = categoryColumns.find(c => c !== detectedUnitColumn) || categoryColumns[0];
+
+      filteredData = rawData.filter(row => {
+        // 1. 호기명 (Unit) Filtering
+        if (selectedUnit !== 'ALL' && detectedUnitColumn) {
+          if (String(row[detectedUnitColumn]).trim() !== selectedUnit) {
+            return false;
+          }
+        }
+
+        // 2. Category Filter
+        if (filterVal !== 'ALL' && mainCat && String(row[mainCat]).trim() !== filterVal) {
+          return false;
+        }
+
+        // 3. Global Search Keyword
+        if (searchTerm) {
+          return Object.values(row).some(v => 
+            String(v).toLowerCase().includes(searchTerm)
+          );
+        }
+
+        return true;
+      });
+
+      currentPage = 1;
+      renderKPIs();
+      renderCharts();
+      renderTable();
+    }
+
+    // Render dynamic KPI cards based on filtered unit dataset
+    function renderKPIs() {
+      const container = document.getElementById('kpiContainer');
+      container.innerHTML = '';
+
+      const unitTitleSuffix = selectedUnit !== 'ALL' ? ` (${selectedUnit})` : ' (전체)';
+
+      // Card 1: Data Count for Selected Unit
+      container.appendChild(createKpiCard(
+        `조회 호기 데이터 건수${unitTitleSuffix}`,
+        filteredData.length.toLocaleString(),
+        "fa-solid fa-database",
+        "bg-indigo-500/10 text-indigo-400 border-indigo-500/20",
+        `전체 시트 데이터: ${rawData.length}건`
+      ));
+
+      // Card 2: Operating Machine Status or Unit Info
+      if (selectedUnit === 'ALL') {
+        container.appendChild(createKpiCard(
+          "등록 호기 수",
+          `${availableUnits.length} 개 호기`,
+          "fa-solid fa-industry",
+          "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
+          `목록: ${availableUnits.slice(0, 3).join(', ')}${availableUnits.length > 3 ? ' 외' : ''}`
+        ));
+      } else {
+        container.appendChild(createKpiCard(
+          "선택 조회 호기명",
+          selectedUnit,
+          "fa-solid fa-microchip",
+          "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
+          `기준 열: [${detectedUnitColumn}]`
+        ));
+      }
+
+      // Card 3 & 4: Numeric Metrics (Sum & Avg)
+      if (numericColumns.length > 0) {
+        const firstNumCol = numericColumns[0];
+        const sum = filteredData.reduce((acc, r) => acc + (parseFloat(r[firstNumCol]) || 0), 0);
+        const avg = filteredData.length ? (sum / filteredData.length) : 0;
+
+        container.appendChild(createKpiCard(
+          `${firstNumCol} (합계)`,
+          formatNumber(sum),
+          "fa-solid fa-calculator",
+          "bg-purple-500/10 text-purple-400 border-purple-500/20",
+          `평균: ${formatNumber(avg)}`
+        ));
+
+        if (numericColumns.length > 1) {
+          const secondNumCol = numericColumns[1];
+          const sum2 = filteredData.reduce((acc, r) => acc + (parseFloat(r[secondNumCol]) || 0), 0);
+          container.appendChild(createKpiCard(
+            `${secondNumCol} (합계)`,
+            formatNumber(sum2),
+            "fa-solid fa-coins",
+            "bg-amber-500/10 text-amber-400 border-amber-500/20",
+            `지표 합산 결과`
+          ));
+        }
+      }
+    }
+
+    function createKpiCard(title, value, iconClass, styleClasses, badgeText) {
+      const card = document.createElement('div');
+      card.className = "bg-slate-900/90 border border-slate-800/90 backdrop-blur rounded-2xl p-5 shadow-xl flex flex-col justify-between hover:border-slate-700 transition";
+      
+      card.innerHTML = `
+        <div class="flex items-center justify-between mb-3">
+          <span class="text-xs font-semibold text-slate-400 truncate">${escapeHtml(title)}</span>
+          <div class="p-2 rounded-xl border ${styleClasses}">
+            <i class="${iconClass} text-sm"></i>
+          </div>
+        </div>
+        <div class="text-2xl font-bold text-white tracking-tight font-mono my-1 truncate">${escapeHtml(value)}</div>
+        <div class="text-[11px] text-slate-500 flex items-center gap-1.5 mt-2">
+          <i class="fa-solid fa-circle-info text-[10px]"></i>
+          <span>${escapeHtml(badgeText)}</span>
+        </div>
+      `;
+      return card;
+    }
+
+    // Render dynamic visual charts
+    function renderCharts() {
+      if (filteredData.length === 0) return;
+
+      const chart1Type = document.getElementById('chart1TypeSelect').value;
+      
+      // If "ALL" is selected, chart 1 breaks down data by 호기명!
+      let primaryCat = categoryColumns[0] || headers[0];
+      if (selectedUnit === 'ALL' && detectedUnitColumn) {
+        primaryCat = detectedUnitColumn;
+      } else if (categoryColumns.find(c => c !== detectedUnitColumn)) {
+        primaryCat = categoryColumns.find(c => c !== detectedUnitColumn);
+      }
+
+      const primaryNum = numericColumns[0];
+
+      // Prepare Data for Chart 1
+      const catMap = {};
+      filteredData.forEach(row => {
+        const cat = String(row[primaryCat] || '기타').trim();
+        const val = primaryNum ? (parseFloat(row[primaryNum]) || 0) : 1;
+        catMap[cat] = (catMap[cat] || 0) + val;
+      });
+
+      const labels1 = Object.keys(catMap).slice(0, 12);
+      const data1 = labels1.map(k => catMap[k]);
+
+      // Render Chart 1
+      const ctx1 = document.getElementById('chart1Canvas').getContext('2d');
+      if (chart1Instance) chart1Instance.destroy();
+
+      const chart1TitleText = primaryNum ? `${primaryCat}별 ${primaryNum} 수치` : `${primaryCat}별 분포`;
+      document.getElementById('chart1Title').innerText = chart1TitleText;
+
+      chart1Instance = new Chart(ctx1, {
+        type: chart1Type,
+        data: {
+          labels: labels1,
+          datasets: [{
+            label: primaryNum || '건수',
+            data: data1,
+            backgroundColor: [
+              '#6366f1', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6',
+              '#3b82f6', '#14b8a6', '#f97316', '#a855f7', '#06b6d4'
+            ],
+            borderColor: '#0f172a',
+            borderWidth: 2,
+            borderRadius: chart1Type === 'bar' ? 6 : 0
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              display: chart1Type === 'doughnut',
+              position: 'bottom',
+              labels: { color: '#94a3b8', font: { family: 'Inter', size: 11 } }
+            }
+          },
+          scales: chart1Type !== 'doughnut' ? {
+            x: { ticks: { color: '#94a3b8' }, grid: { color: '#1e293b' } },
+            y: { ticks: { color: '#94a3b8' }, grid: { color: '#1e293b' } }
+          } : {}
+        }
+      });
+
+      // Prepare Data for Chart 2 (Secondary ratio chart)
+      let secondaryCat = categoryColumns.find(c => c !== primaryCat && c !== detectedUnitColumn) || categoryColumns[0] || headers[1] || headers[0];
+      const secMap = {};
+      filteredData.forEach(row => {
+        const cat = String(row[secondaryCat] || '기타').trim();
+        secMap[cat] = (secMap[cat] || 0) + 1;
+      });
+
+      const labels2 = Object.keys(secMap).slice(0, 7);
+      const data2 = labels2.map(k => secMap[k]);
+
+      const ctx2 = document.getElementById('chart2Canvas').getContext('2d');
+      if (chart2Instance) chart2Instance.destroy();
+
+      document.getElementById('chart2Title').innerText = `${secondaryCat} 구성 비율`;
+
+      chart2Instance = new Chart(ctx2, {
+        type: 'doughnut',
+        data: {
+          labels: labels2,
+          datasets: [{
+            data: data2,
+            backgroundColor: ['#10b981', '#3b82f6', '#f59e0b', '#ec4899', '#8b5cf6', '#06b6d4'],
+            borderColor: '#0f172a',
+            borderWidth: 3
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              position: 'bottom',
+              labels: { color: '#94a3b8', font: { family: 'Inter', size: 11 } }
+            }
+          }
+        }
+      });
+    }
+
+    // Render dynamic paginated data table
+    function renderTable() {
+      const tableHeader = document.getElementById('tableHeader');
+      const tableBody = document.getElementById('tableBody');
+      const rowCountBadge = document.getElementById('rowCountBadge');
+
+      rowCountBadge.textContent = `${filteredData.length}건`;
+
+      if (headers.length === 0 || filteredData.length === 0) {
+        tableHeader.innerHTML = `<tr><th class="p-4 text-center">데이터가 존재하지 않습니다.</th></tr>`;
+        tableBody.innerHTML = `<tr><td class="p-8 text-center text-slate-500">일치하는 결과가 없습니다.</td></tr>`;
+        updatePaginationUI(0, 1);
+        return;
+      }
+
+      // Render Table Header
+      let headerHtml = '<tr>';
+      headers.forEach(h => {
+        const isUnitCol = h === detectedUnitColumn;
+        headerHtml += `<th class="p-3.5 text-xs font-semibold text-slate-300 border-b border-slate-800 ${isUnitCol ? 'text-indigo-400 bg-indigo-500/5' : ''}">${escapeHtml(h)}</th>`;
+      });
+      headerHtml += '</tr>';
+      tableHeader.innerHTML = headerHtml;
+
+      // Calculate Pagination
+      const totalPages = Math.ceil(filteredData.length / itemsPerPage) || 1;
+      if (currentPage > totalPages) currentPage = totalPages;
+
+      const startIndex = (currentPage - 1) * itemsPerPage;
+      const paginatedRows = filteredData.slice(startIndex, startIndex + itemsPerPage);
+
+      // Render Table Rows
+      let bodyHtml = '';
+      paginatedRows.forEach(row => {
+        bodyHtml += '<tr class="hover:bg-slate-800/40 transition-colors">';
+        headers.forEach(h => {
+          const val = row[h];
+          const displayVal = (val === null || val === undefined) ? '-' : String(val);
+          const isUnitCol = h === detectedUnitColumn;
+
+          if (isUnitCol) {
+            bodyHtml += `
+              <td class="p-3.5 font-semibold text-indigo-300 bg-indigo-500/5 whitespace-nowrap">
+                <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-indigo-500/10 border border-indigo-500/20">
+                  <i class="fa-solid fa-microchip text-[10px] text-indigo-400"></i>
+                  ${escapeHtml(displayVal)}
+                </span>
+              </td>`;
+          } else {
+            bodyHtml += `<td class="p-3.5 whitespace-nowrap text-slate-300">${escapeHtml(displayVal)}</td>`;
+          }
+        });
+        bodyHtml += '</tr>';
+      });
+
+      tableBody.innerHTML = bodyHtml;
+      updatePaginationUI(filteredData.length, totalPages);
+    }
+
+    function updatePaginationUI(totalItems, totalPages) {
+      document.getElementById('currentPageNum').textContent = currentPage;
+      document.getElementById('paginationInfo').textContent = `페이지 ${currentPage} / ${totalPages} (총 ${totalItems}건)`;
+
+      document.getElementById('prevPageBtn').disabled = currentPage <= 1;
+      document.getElementById('nextPageBtn').disabled = currentPage >= totalPages;
+    }
+
+    function changePage(delta) {
+      currentPage += delta;
+      renderTable();
+    }
+
+    // Export currently filtered data as CSV
+    function exportCSV() {
+      if (!filteredData || filteredData.length === 0) {
+        alert("내보낼 데이터가 없습니다.");
+        return;
+      }
+
+      const csv = Papa.unparse(filteredData);
+      const blob = new Blob(["\ufeff" + csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      
+      const link = document.createElement('a');
+      const unitNameStr = selectedUnit === 'ALL' ? '전체' : selectedUnit;
+      link.href = url;
+      link.setAttribute('download', `대시보드_데이터_${unitNameStr}_${new Date().toISOString().slice(0,10)}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+
+    // Modal Toggle
+    function toggleSettingsModal() {
+      const modal = document.getElementById('settingsModal');
+      modal.classList.toggle('hidden');
+    }
+
+    // Save Settings Handler
+    function saveSettings() {
+      const newUrl = document.getElementById('sheetUrlInput').value.trim();
+      const newInterval = parseInt(document.getElementById('refreshIntervalSelect').value);
+      const newProxy = document.getElementById('useProxyToggle').checked;
+      const newUnitCol = document.getElementById('unitColumnSettingSelect').value;
+
+      if (newUrl) {
+        currentCsvUrl = newUrl;
+        localStorage.setItem('dash_csv_url', newUrl);
+      }
+      refreshInterval = newInterval;
+      localStorage.setItem('dash_interval', newInterval);
+      useProxy = newProxy;
+      localStorage.setItem('dash_proxy', newProxy);
+
+      customUnitColumn = newUnitCol;
+      localStorage.setItem('dash_unit_col', newUnitCol);
+
+      toggleSettingsModal();
+      fetchData(true);
+      startTimer();
+    }
+
+    // Number Formatting Helper
+    function formatNumber(num) {
+      if (isNaN(num)) return '-';
+      return Number(num).toLocaleString(undefined, { maximumFractionDigits: 2 });
+    }
+
+    // HTML Escaping Guard
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+  </script>
+</body>
+</html>
